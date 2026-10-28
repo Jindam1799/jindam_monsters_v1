@@ -3,45 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#2b2340">
-<title>진담 몬스터즈 · 중국 10대 비밀 일기</title>
-<meta name="description" content="진담중국어 교재 2권 「중국 10대 비밀 일기」와 함께하는 덩어리 몬스터 RPG">
+<meta name="theme-color" content="#fff4e8">
+<title>진담 수사대 · 중국 10대 비밀 일기</title>
+<meta name="description" content="진담중국어 교재 2권 「중국 10대 비밀 일기」와 함께하는 중국어 수사 게임">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+SC:wght@500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=0.1.0">
+<link rel="stylesheet" href="css/style.css?v=0.2.0">
 </head>
 <body>
 <div id="app">
-  <div id="screen">
-    <canvas id="cv" width="480" height="432"></canvas>
-    <div id="hud"><div id="quest"></div></div>
-    <div id="ui"></div>
-    <div id="flash"></div>
-  </div>
-  <div id="pad">
-    <div class="dpad">
-      <button class="pb up" data-k="up" aria-label="위">▲</button>
-      <button class="pb left" data-k="left" aria-label="왼쪽">◀</button>
-      <button class="pb right" data-k="right" aria-label="오른쪽">▶</button>
-      <button class="pb down" data-k="down" aria-label="아래">▼</button>
-      <span class="hub"></span>
-    </div>
-    <div class="mid">
-      <button class="pb small" data-k="START">메뉴</button>
-      <div class="keys">방향키 이동 · Z/스페이스 = A · X = B · M = 메뉴</div>
-    </div>
-    <div class="ab">
-      <button class="pb b" data-k="B">B</button>
-      <button class="pb a" data-k="A">A</button>
-    </div>
-  </div>
+  <header id="top"></header>
+  <main id="stage"></main>
+  <section id="tray"></section>
+  <div id="ui"></div>
 </div>
-<script src="js/data.js?v=0.1.0"></script>
-<script src="js/map.js?v=0.1.0"></script>
-<script src="js/art.js?v=0.1.0"></script>
-<script src="js/tts.js?v=0.1.0"></script>
-<script src="js/sound.js?v=0.1.0"></script>
-<script src="js/game.js?v=0.1.0"></script>
+<script src="js/data.js?v=0.2.0"></script>
+<script src="js/svg.js?v=0.2.0"></script>
+<script src="js/tts.js?v=0.2.0"></script>
+<script src="js/sound.js?v=0.2.0"></script>
+<script src="js/game.js?v=0.2.0"></script>
 </body>
 </html>
