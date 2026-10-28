@@ -9,7 +9,8 @@ const Pic = (() => {
     xiaoyu:   { hair: '#3a2414', shirt: '#ffd36e', pants: '#7fb2ec', style: 'bun' },
     wanghao:  { hair: '#24242c', shirt: '#b49ae6', pants: '#6b6b8f', style: 'short' },
     kid:      { hair: '#24242c', shirt: '#7fb2ec', pants: '#7fb2ec', style: 'short', uni: 1 },
-    kid2:     { hair: '#3a2a1a', shirt: '#7fb2ec', pants: '#7fb2ec', style: 'long', uni: 1 }
+    kid2:     { hair: '#3a2a1a', shirt: '#7fb2ec', pants: '#7fb2ec', style: 'long', uni: 1 },
+    guard:    { hair: '#8a8a8a', shirt: '#6f86b8', pants: '#4f5f88', style: 'short' }
   };
   const SKIN = '#ffdcbf', LINE = '#4b3b5c';
 
@@ -32,25 +33,58 @@ const Pic = (() => {
       : `<path d="M26 40 Q30 44 34 40" stroke="${LINE}" stroke-width="2" fill="none" stroke-linecap="round"/>`;
     return eyes + `<ellipse cx="17" cy="38" rx="4" ry="2.4" fill="#ffadb8" opacity=".8"/><ellipse cx="43" cy="38" rx="4" ry="2.4" fill="#ffadb8" opacity=".8"/>` + mouth;
   }
-  /* 서 있는 사람 (60×120). pose: stand | shh | phone | wave */
-  function person(look, { pose = 'stand', mood = 'smile' } = {}) {
+  /* 서 있는 사람 (60×120). dir: down | up | left | right, frame: 0 서기 / 1·2 걷기, pose: stand | shh | phone | wave */
+  function person(look, { pose = 'stand', mood = 'smile', dir = 'down', frame = 0 } = {}) {
     const L = LOOKS[look] || LOOKS.boy;
     const arm = (x1, y1, x2, y2) => `<path d="M${x1} ${y1} L${x2} ${y2}" stroke="${L.shirt}" stroke-width="9" stroke-linecap="round"/><circle cx="${x2}" cy="${y2}" r="5" fill="${SKIN}"/>`;
-    let arms = arm(14, 58, 8, 84) + arm(46, 58, 52, 84);
+    const lift = [[0, 0], [-4, 0], [0, -4]][frame] || [0, 0];
+    const legs = `<rect x="18" y="90" width="10" height="${24 + lift[0]}" rx="4" fill="${L.pants}"/><rect x="32" y="90" width="10" height="${24 + lift[1]}" rx="4" fill="${L.pants}"/>
+      <rect x="16" y="${110 + lift[0]}" width="13" height="7" rx="3" fill="#5a4a6a"/><rect x="31" y="${110 + lift[1]}" width="13" height="7" rx="3" fill="#5a4a6a"/>`;
+    const sw = frame === 1 ? 6 : frame === 2 ? -6 : 0;
+    const uni = L.uni ? `<path d="M22 52 L30 64 L38 52" fill="#fff"/><rect x="12" y="74" width="36" height="4" fill="#fff" opacity=".8"/>` : '';
+    const bob = frame ? -2 : 0;
+    if (dir === 'up') {
+      return `<g class="person"><ellipse cx="30" cy="117" rx="20" ry="4" fill="#000" opacity=".1"/>${legs}<g transform="translate(0,${bob})">
+        <rect x="12" y="50" width="36" height="44" rx="15" fill="${L.shirt}"/>${arm(14, 58, 8, 84 - sw)}${arm(46, 58, 52, 84 + sw)}
+        <circle cx="30" cy="30" r="22" fill="${SKIN}"/><circle cx="30" cy="28" r="22.5" fill="${L.hair}"/>
+        ${L.style === 'long' || L.style === 'pony' ? `<path d="M10 30 Q8 66 16 74 L44 74 Q52 66 50 30 Z" fill="${L.hair}"/>` : ''}${L.style === 'bun' ? `<circle cx="30" cy="8" r="9" fill="${L.hair}"/>` : ''}
+        ${L.style === 'pony' ? `<circle cx="30" cy="14" r="4" fill="#ff8aa6"/>` : ''}</g></g>`;
+    }
+    if (dir === 'left' || dir === 'right') {
+      const body = `<g class="person"><ellipse cx="30" cy="117" rx="18" ry="4" fill="#000" opacity=".1"/>
+        <rect x="${24 - sw}" y="90" width="11" height="24" rx="4" fill="${L.pants}"/><rect x="${25 + sw}" y="90" width="11" height="24" rx="4" fill="${L.pants}"/>
+        <rect x="${24 - sw}" y="110" width="15" height="7" rx="3" fill="#5a4a6a"/><rect x="${25 + sw}" y="110" width="15" height="7" rx="3" fill="#5a4a6a"/>
+        <g transform="translate(0,${bob})">${L.style === 'long' || L.style === 'pony' ? `<path d="M10 26 Q4 60 14 72 L28 72 L26 30 Z" fill="${L.hair}"/>` : ''}
+        <rect x="16" y="50" width="30" height="44" rx="14" fill="${L.shirt}"/>${L.uni ? `<rect x="16" y="74" width="30" height="4" fill="#fff" opacity=".8"/>` : ''}
+        ${arm(31, 58, 31 + sw, 84)}
+        <circle cx="31" cy="30" r="22" fill="${SKIN}"/>
+        <path d="M9 32 Q8 6 32 6 Q50 6 53 24 Q40 16 30 20 Q24 34 18 40 Z" fill="${L.hair}"/>
+        ${L.style === 'bun' ? `<circle cx="16" cy="10" r="9" fill="${L.hair}"/>` : ''}${L.style === 'pony' ? `<circle cx="13" cy="20" r="4" fill="#ff8aa6"/>` : ''}
+        <circle cx="42" cy="31" r="2.8" fill="${LINE}"/><circle cx="43" cy="30" r="1" fill="#fff"/>
+        <ellipse cx="44" cy="38" rx="4" ry="2.4" fill="#ffadb8" opacity=".8"/><path d="M45 42 Q48 43 50 41" stroke="${LINE}" stroke-width="2" fill="none" stroke-linecap="round"/></g></g>`;
+      return dir === 'left' ? `<g transform="translate(60,0) scale(-1,1)">${body}</g>` : body;
+    }
+    let arms = arm(14, 58, 8, 84 - sw) + arm(46, 58, 52, 84 + sw);
     if (pose === 'shh') { arms = arm(14, 58, 8, 84) + arm(46, 58, 34, 42); mood = 'shh'; }
     if (pose === 'phone') arms = arm(14, 58, 22, 70) + arm(46, 58, 38, 70) + `<rect x="22" y="60" width="16" height="22" rx="3" fill="#3b3b4f"/><rect x="24" y="62" width="12" height="16" rx="2" fill="#bfe6ff"/>`;
     if (pose === 'wave') arms = arm(14, 58, 8, 84) + arm(46, 58, 58, 36);
-    const uni = L.uni ? `<path d="M22 52 L30 64 L38 52" fill="#fff"/><rect x="12" y="74" width="36" height="4" fill="#fff" opacity=".8"/>` : '';
     return `<g class="person">
-      <ellipse cx="30" cy="117" rx="20" ry="4" fill="#000" opacity=".1"/>
-      ${hair(L, true)}
-      <rect x="18" y="90" width="10" height="24" rx="4" fill="${L.pants}"/><rect x="32" y="90" width="10" height="24" rx="4" fill="${L.pants}"/>
-      <rect x="16" y="110" width="13" height="7" rx="3" fill="#5a4a6a"/><rect x="31" y="110" width="13" height="7" rx="3" fill="#5a4a6a"/>
+      <ellipse cx="30" cy="117" rx="20" ry="4" fill="#000" opacity=".1"/>${legs}
+      <g transform="translate(0,${bob})">${hair(L, true)}
       <rect x="12" y="50" width="36" height="44" rx="15" fill="${L.shirt}"/>${uni}
       ${arms}
       <circle cx="30" cy="30" r="22" fill="${SKIN}"/>
-      ${hair(L, false)}${face(mood)}
+      ${hair(L, false)}${face(mood)}</g>
     </g>`;
+  }
+  /* 사람 그림을 <img>로 (지도 위에 그리기용) */
+  const imgCache = {};
+  function personImg(look, opt = {}) {
+    const key = look + JSON.stringify(opt);
+    if (imgCache[key]) return imgCache[key];
+    const im = new Image();
+    im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 122" width="120" height="244">${person(look, opt)}</svg>`);
+    imgCache[key] = im; return im;
   }
   /* 얼굴만 (대화창 그림) */
   function portrait(look, mood = 'smile') {
@@ -220,5 +254,5 @@ const Pic = (() => {
       ${[[70, 380], [150, 470], [340, 360], [190, 380]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="3" fill="#ffadb8"/><circle cx="${x + 7}" cy="${y + 3}" r="3" fill="#fff"/>`).join('')}
     </svg>`;
   }
-  return { person, portrait, scene, map, SCENES, PINS, LOOKS };
+  return { person, personImg, portrait, scene, map, SCENES, PINS, LOOKS };
 })();

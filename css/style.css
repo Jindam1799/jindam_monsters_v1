@@ -189,3 +189,74 @@ input.name { font-family: var(--ko); font-size: 5cqw; padding: 2.4cqw 3cqw; bord
 .cover .seal { position: absolute; right: 8cqw; bottom: 22cqw; width: 15cqw; font-size: 6cqw; transform: rotate(12deg); }
 .cover .tb { display: grid; gap: 3cqw; margin-top: 7cqw; }
 .cover .ver { margin-top: 5cqw; font-size: 3cqw; color: #8a4f48; }
+
+/* ── v0.3: 걷는 세계 ── */
+#world { position: absolute; inset: 0; display: block; touch-action: none; cursor: pointer; }
+#stage:has(#world) { margin: 0 2.4cqw; border-radius: 4cqw; overflow: hidden; border: 1cqw solid #fff; box-shadow: 0 0 0 .5cqw var(--line); }
+#tray .notebook { padding: 2.4cqw 3cqw; }
+#tray .nb-head { font-size: 3.6cqw; margin-bottom: 1.6cqw; gap: 2cqw; }
+#tray .seals { gap: 1.4cqw; }
+#tray .seal, #tray .slot { font-size: 5cqw; }
+.storypic { position: absolute; left: 3cqw; right: 3cqw; top: calc(env(safe-area-inset-top) + 3cqw); border-radius: 4cqw; overflow: hidden; border: 1cqw solid #fff; box-shadow: 0 1.6cqw 0 var(--line), 0 3cqw 8cqw rgba(75,59,92,.2); animation: pop2 .25s ease-out; pointer-events: none !important; }
+.storypic svg { display: block; width: 100%; height: auto; }
+@keyframes pop2 { from { transform: scale(.94); opacity: 0; } }
+.card.low { top: auto; bottom: calc(env(safe-area-inset-bottom) + 3cqw); transform: none; max-height: 62%; animation: up .2s ease-out; }
+
+/* ── 배틀: 헷갈이와 말 대결 ── */
+.battle { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg1); animation: bin .45s ease-out; z-index: 5; }
+.battle.out { animation: bout .35s ease-in forwards; }
+@keyframes bin { 0% { clip-path: circle(0% at 50% 50%); } 100% { clip-path: circle(80% at 50% 50%); } }
+@keyframes bout { to { opacity: 0; transform: scale(1.04); } }
+.b-head { display: flex; justify-content: space-between; align-items: center; padding: calc(env(safe-area-inset-top) + 3cqw) 4cqw 2cqw; font-size: 3.8cqw; }
+.fog { display: flex; align-items: center; gap: 1.2cqw; background: #fff; border-radius: 4cqw; padding: 1cqw 2.6cqw; border: .5cqw solid var(--line); }
+.fog i { width: 6cqw; height: 3cqw; border-radius: 2cqw; background: #eee8f5; display: block; transition: background .3s; }
+.fog i.on { background: #b9addf; }
+.b-stage { position: relative; flex: 1; min-height: 60cqw; overflow: hidden; }
+.b-stage::after { content: ''; position: absolute; left: 6%; right: 6%; bottom: 14%; height: 5cqw; border-radius: 50%; background: rgba(75,59,92,.06); }
+.b-bush { position: absolute; bottom: 4%; width: 34cqw; height: 16cqw; background: radial-gradient(circle at 25% 70%, #a8d98a 0 32%, transparent 33%), radial-gradient(circle at 60% 55%, #9fd88a 0 38%, transparent 39%), radial-gradient(circle at 85% 75%, #b5e29b 0 28%, transparent 29%); }
+.b-bush.l { left: -8cqw; } .b-bush.r { right: -8cqw; transform: scaleX(-1); }
+.b-me { position: absolute; left: 10%; bottom: 13%; width: 24cqw; animation: bin2 .5s ease-out; transition: transform .2s; }
+.b-me svg { width: 100%; height: auto; display: block; }
+.b-me.throw { transform: translateX(3cqw) rotate(4deg); }
+@keyframes bin2 { from { transform: translateX(-40cqw); } }
+.b-foe { position: absolute; right: 6%; bottom: 14%; width: 40cqw; text-align: center; animation: fin .5s ease-out; }
+@keyframes fin { from { transform: translateX(50cqw); opacity: 0; } }
+.b-foe .het { width: 100%; height: auto; display: block; }
+.het-body { animation: hover 2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes hover { 50% { transform: translateY(-4px) rotate(-2deg); } }
+.het-note { animation: wig 1.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.b-tag { position: absolute; left: 50%; top: -9cqw; transform: translateX(-50%); background: #fff; border: .5cqw solid var(--line); border-radius: 3cqw; padding: 1cqw 3cqw; font-size: 3.8cqw; white-space: nowrap; box-shadow: 0 .8cqw 0 var(--line); }
+.b-tag small { display: block; font-size: 2.9cqw; color: #9a8aae; }
+.b-foe.hit .het { animation: hit .5s; }
+@keyframes hit { 20% { transform: translateX(3cqw) scale(.94); filter: brightness(1.3); } 60% { transform: translateX(-1cqw); } }
+.b-foe.giggle .het { animation: giggle .5s 2; }
+@keyframes giggle { 25% { transform: rotate(-8deg); } 75% { transform: rotate(8deg); } }
+.b-foe.run { transition: transform .8s ease-in, opacity .8s; transform: translateX(70cqw) rotate(20deg); opacity: 0; }
+.b-foe.vanish { transition: transform .35s, opacity .35s; transform: scale(1.3); opacity: 0; }
+.b-fx { position: absolute; inset: 0; pointer-events: none; }
+.b-shot { position: absolute; left: 30%; bottom: 40%; background: #fff; border: .6cqw solid var(--sun); border-radius: 5cqw; padding: 1.6cqw 3cqw; font-family: var(--zh); font-weight: 700; font-size: 4.6cqw; white-space: nowrap;
+  transition: transform .6s cubic-bezier(.4,0,.7,1), opacity .6s; box-shadow: 0 1cqw 0 #e8b84a; }
+.b-shot::after { content: ''; position: absolute; left: 3cqw; bottom: -2.4cqw; border: 1.4cqw solid transparent; border-top-color: var(--sun); }
+.b-shot.go { transform: translate(34cqw, -6cqw) scale(1.15); }
+.puff { position: absolute; right: 24%; bottom: 34%; width: 7cqw; height: 7cqw; border-radius: 50%; background: #fff; opacity: .9; animation: puff .7s ease-out forwards; }
+@keyframes puff { to { transform: rotate(var(--a)) translateX(16cqw) scale(.3); opacity: 0; } }
+.b-stamp { position: absolute; right: 14%; bottom: 26%; width: 26cqw; text-align: center; animation: stampin .5s cubic-bezier(.3,1.6,.5,1); }
+.b-stamp .seal { font-size: 13cqw; border-radius: 4cqw; }
+.b-stamp b { display: block; font-weight: normal; font-size: 6cqw; color: var(--red); margin-top: 1cqw; }
+.b-panel { background: var(--paper); border-top: .6cqw solid var(--line); padding: 3.4cqw 4cqw calc(env(safe-area-inset-bottom) + 4cqw); min-height: 34%; }
+.b-msg { font-size: 4.4cqw; line-height: 1.5; min-height: 13cqw; white-space: pre-wrap; }
+.b-cmd { display: grid; grid-template-columns: 1fr 1fr; gap: 2.4cqw; margin-top: 2cqw; }
+.b-cmd .btn { text-align: center; font-size: 4.2cqw; padding: 3cqw 2cqw; }
+.b-cmd .btn:first-child { background: var(--sun); border-color: #e8b84a; box-shadow: 0 .9cqw 0 #e8b84a; }
+
+.b-vs { position: absolute; left: 50%; top: 18%; width: 12cqw; transform: translateX(-50%); animation: stampin .6s .35s both cubic-bezier(.3,1.6,.5,1); }
+.b-vs .seal { font-size: 6.4cqw; transform: rotate(-8deg); }
+
+/* 배틀 위에 퀴즈·카드·대화가 보이도록 */
+.dim { z-index: 7; } .card, .box { z-index: 8; }
+.b-stage::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 30%; background: var(--bg2); }
+.b-stage { transition: transform .35s ease; transform-origin: 50% 0; }
+.battle.q .b-stage { transform: translateY(-6%) scale(.8); }
+.battle.q .b-panel { visibility: hidden; }
+.b-me { width: 28cqw; } .b-foe { width: 44cqw; }
+.card.low { top: auto; bottom: calc(env(safe-area-inset-bottom) + 3cqw); transform: none; max-height: 58%; animation: up .2s ease-out; }

@@ -1,11 +1,12 @@
 /* 진담 수사대 · 중국 10대 비밀 일기 — 게임 본체
-   흐름: 학교 지도 → 장소(그림 장면) → 단서 쪽지 6장 찾기(퀴즈 → 도장) → 친구와 메신저 대화 → 비밀 일기 → 내 문장 → 교재 미션 */
-const APP_VERSION = 'v0.2.0 (2026.10.28)';
+   흐름: 학교를 칸 단위로 걸어 다니며 친구와 이야기(수상한 질문) → 수풀에서 헷갈이를 만나면 배틀(퀴즈로 안개 걷기 → 도장)
+        → 도장 6개 → 친구와 메신저 1분 대화 → 비밀 일기 → 내 문장 → 교재 미션 → 잠긴 문이 열림 */
+const APP_VERSION = 'v0.3.0 (2026.10.28)';
 const KEY = 'jdm1-';
 
 /* ───────── 저장 ───────── */
 function newSave() {
-  return { v: 2, name: '', look: 'girl', intro: false, here: 0,
+  return { v: 3, name: '', look: 'girl', intro: false, x: START_POS.x, y: START_POS.y, dir: START_POS.dir, quiet: {}, due: {},
     L: { 1: 0, 2: 0, 3: 0, 4: 0 }, caught: {}, weak: {}, mastery: {}, grad: 0, candy: 3, catches: 0, pages: {}, boss: false };
 }
 const store = {
@@ -14,6 +15,8 @@ const store = {
   clear() { try { Object.keys(localStorage).filter(k => k.startsWith(KEY)).forEach(k => localStorage.removeItem(k)); } catch (e) {} }
 };
 let save = Object.assign(newSave(), store.get('save', {}) || {});
+if (typeof save.x !== 'number') Object.assign(save, { x: START_POS.x, y: START_POS.y, dir: START_POS.dir });
+save.quiet = save.quiet || {}; save.due = save.due || {};
 const set = Object.assign({ py: true, ko: true, rate: 0.85, sfx: true, bgm: true, voice: '' }, store.get('set', {}));
 const persist = () => store.set('save', save);
 const persistSet = () => store.set('set', set);
@@ -42,12 +45,22 @@ const unlocked = n => n === 1 || (n <= 4 ? save.L[n - 1] === 3 : save.L[4] === 3
 const handlers = [];
 const pushH = h => handlers.push(h);
 const popH = h => { const i = handlers.lastIndexOf(h); if (i >= 0) handlers.splice(i, 1); };
-function press(k) { Sound.init(); const h = handlers[handlers.length - 1]; if (h) h(k); }
-const KEYMAP = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', ' ': 'A', Enter: 'A', z: 'A', Escape: 'B', x: 'B' };
+function press(k) {
+  Sound.init();
+  const h = handlers[handlers.length - 1];
+  if (h) { h(k); return; }
+  if (screen === 'world') { if (k === 'A') interact(); if (k === 'START' || k === 'B') openMenu(); }
+}
+const KEYMAP = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right',
+  ' ': 'A', Enter: 'A', z: 'A', Escape: 'B', x: 'B', m: 'START' };
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') { if (e.key === 'Enter') press('A'); return; }
-  const k = KEYMAP[e.key]; if (!k || e.repeat) return; e.preventDefault(); press(k);
+  const k = KEYMAP[e.key] || KEYMAP[(e.key || '').toLowerCase()]; if (!k) return; e.preventDefault();
+  if (held[k] !== undefined) { if (!held[k]) { held[k] = 1; if (handlers.length) press(k); } return; }
+  if (!e.repeat) press(k);
 });
+document.addEventListener('keyup', e => { const k = KEYMAP[e.key] || KEYMAP[(e.key || '').toLowerCase()]; if (held[k] !== undefined) held[k] = 0; });
+window.addEventListener('blur', () => Object.keys(held).forEach(k => held[k] = 0));
 document.addEventListener('pointerdown', () => Sound.init(), { once: true });
 
 function navigate(root, { cols = 1, onB = null, start = -1 } = {}) {
@@ -101,163 +114,362 @@ function box(l) {
 }
 async function say(lines) { for (const l of [].concat(lines)) await box(l); }
 
-function card(html, cls = '') {
-  const dim = el('<div class="dim"></div>'); uiRoot.appendChild(dim);
+function card(html, cls = '', dimmed = true) {
+  const dim = dimmed ? el('<div class="dim"></div>') : null; if (dim) uiRoot.appendChild(dim);
   const c = el(`<div class="card ${cls}">${html}</div>`); uiRoot.appendChild(c);
-  c.close = () => { dim.remove(); c.remove(); };
+  c.close = () => { if (dim) dim.remove(); c.remove(); };
   return c;
 }
 function fade() { const f = el('<div class="fade"></div>'); document.getElementById('app').appendChild(f); setTimeout(() => f.remove(), 520); return sleep(220); }
 let busy = false;
 async function run(fn) { if (busy) return; busy = true; try { await fn(); } catch (e) { console.error(e); } busy = false; refresh(); }
 
-/* ───────── 화면: 학교 지도 ───────── */
-let screen = 'title', curScene = 0;
-function topBar(title, subt, back) {
-  topEl.innerHTML = `${back ? '<button class="ib" data-a="map">← 지도</button>' : '<span style="font-size:7cqw">🔍</span>'}
-    <div class="ttl">${esc(title)}<small>${esc(subt)}</small></div>
-    <span class="chip">💡 ${save.candy}</span><button class="ib" data-a="menu">☰</button>`;
-  topEl.querySelector('[data-a="menu"]').onclick = () => openMenu();
-  const m = topEl.querySelector('[data-a="map"]'); if (m) m.onclick = () => { if (!busy) fade().then(showMap); };
+/* ───────── 걷는 세계 (칸 이동) ───────── */
+let screen = 'title';
+const cv = document.createElement('canvas'); cv.id = 'world';
+const ctx = cv.getContext('2d');
+let TP = 40, DPR = 1, layer = null;
+const MOVE_MS = 200;
+const player = { x: save.x, y: save.y, dir: save.dir, fx: save.x, fy: save.y, moving: null, alt: 0 };
+const npcs = NPCS.map(n => Object.assign({}, n, { ox: n.x, oy: n.y, fx: n.x, fy: n.y, moving: null, alt: 0, next: performance.now() + 2000 + Math.random() * 3000 }));
+const held = { up: 0, down: 0, left: 0, right: 0 };
+let path = [], pendingAct = null, tapMark = null, pop = null, stepsSince = 10, lastBump = 0;
+
+const npcVisible = n => n.kind === 'gate' ? save.L[n.gate] < 3 : true;
+const tileAt = (x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) ? 'T' : MAP[y][x];
+const buildingAt = (x, y) => BUILDINGS.find(b => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+const npcAt = (x, y) => npcs.find(n => npcVisible(n) && ((n.x === x && n.y === y) || (n.moving && n.moving.tx === x && n.moving.ty === y)));
+const isBush = t => '1234'.includes(t);
+const DIRV = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+function solid(x, y) { const t = tileAt(x, y); return 'T~FGS'.includes(t) || !!buildingAt(x, y); }
+function blocked(x, y, self) {
+  if (solid(x, y)) return true;
+  const n = npcAt(x, y); if (n && n !== self) return true;
+  if (self && self !== player && ((player.x === x && player.y === y) || (player.moving && player.moving.tx === x && player.moving.ty === y))) return true;
+  return false;
 }
-function questText() {
-  for (let n = 1; n <= 4; n++) {
-    const st = save.L[n];
-    if (st === 3) continue;
-    if (st === 0) return `📍 ${n}번 장소로 가서 ${NPC_NAME[n]}을 만나요`;
-    if (caughtIn(n) < 6) return `🔍 ${n}번 장소에서 단서 쪽지 찾기 ${caughtIn(n)}/6`;
-    return `💬 ${NPC_NAME[n]}과 메신저로 대화해요`;
-  }
-  if (!save.boss) return '📚 도서관에서 중간 수사 회의!';
-  const w = weakList().length;
-  return w ? `🃏 오답 카드 ${w}장 — 다시 풀어서 졸업시켜요` : '🎉 1~4과 수사 완료!';
-}
-function showMap() {
-  screen = 'map'; curScene = 0; Sound.bgm('map');
-  topBar('진담 수사대', `${save.name || '나'}의 수사 지도`, false);
-  let svg = Pic.map();
-  const pins = [1, 2, 3, 4, 5].map(n => {
-    const [x, y] = Pic.PINS[n], lock = !unlocked(n), done = n <= 4 ? save.L[n] === 3 : save.boss;
-    const cur = !lock && !done;
-    const col = lock ? '#c9bcae' : done ? '#7fd6a8' : n === 5 ? '#b49ae6' : '#ff8a7a';
-    return `<g class="pin ${lock ? 'lock' : ''} ${done ? 'done' : ''}" data-n="${n}">
-      <g class="bob"><path d="M${x} ${y + 26} L${x - 11} ${y + 8} A15 15 0 1 1 ${x + 11} ${y + 8} Z" fill="${col}" stroke="#fff" stroke-width="3"/>
-      <text x="${x}" y="${y + 9}" text-anchor="middle" font-size="${lock || done || n === 5 ? 12 : 16}" fill="#fff" font-weight="700">${lock ? '🔒' : done ? '✓' : n === 5 ? '🔍' : n}</text></g>
-      ${cur ? `<rect x="${x - 22}" y="${y - 30}" width="44" height="16" rx="8" fill="#fff"/><text x="${x}" y="${y - 18}" text-anchor="middle" font-size="11" fill="#4b3b5c" class="zh-svg">${n <= 4 ? NPC_NAME[n] : '회의'}</text>` : ''}</g>`;
-  }).join('');
-  const here = save.here && Pic.PINS[save.here] ? Pic.PINS[save.here] : [200, 470];
-  const me = `<g transform="translate(${here[0] + 12},${here[1] - 4}) scale(.34)" pointer-events="none">${Pic.person(save.look)}</g>`;
-  const teacher = `<g class="pin" data-n="t"><g transform="translate(244,452) scale(.42)">${Pic.person('teacher', { pose: 'wave' })}</g>
-    <rect x="226" y="436" width="64" height="18" rx="9" fill="#fff"/><text x="258" y="449" text-anchor="middle" font-size="11" fill="#4b3b5c">진아쌤 💡</text></g>`;
-  svg = svg.replace('</svg>', pins + teacher + me + '</svg>');
-  stage.innerHTML = `<div class="map-wrap">${svg}</div>`;
-  stage.querySelectorAll('.pin').forEach(p => p.onclick = () => {
-    const n = p.dataset.n;
-    if (busy) return;
-    if (n === 't') return run(talkTeacher);
-    const k = +n;
-    if (!unlocked(k)) { Sound.sfx('bad'); toast(k === 5 ? '4번 장소까지 해결하면 열려요' : `먼저 ${k - 1}번 장소의 사건을 해결해요`); return; }
-    Sound.sfx('door'); fade().then(() => openScene(k));
-  });
-  tray.innerHTML = `<div class="notebook"><div class="nb-head"><span>${esc(questText())}</span></div>
-    <div class="small">지도의 장소를 눌러 이동해요. 진아쌤을 누르면 힌트를 줘요.</div></div>`;
+function zoneName(x = player.x, y = player.y) {
+  if (y >= 22) return '정문 광장';
+  if (y >= 13) return x <= 15 ? '교실동 앞' : '운동장';
+  return x <= 15 ? '기숙사 · 도서관' : '매점 앞';
 }
 
-/* ───────── 화면: 장소 ───────── */
-let notes = [];   // { id, si, spot:[x,y], again }
-function buildNotes(no) {
-  const S = Pic.SCENES[no], L = lessonOf(no);
-  if (save.L[no] === 0) return [];
-  const used = new Set(); const list = [];
-  L.chunks.forEach((c, i) => {
-    if (save.caught[c.id] && !save.weak[c.id]) return;
-    let si = i;
-    if (save.weak[c.id]) si = shuffle([...S.spots.keys()].filter(k => !used.has(k) && k >= 6))[0] ?? i;
-    used.add(si); list.push({ id: c.id, si, spot: S.spots[si], again: !!save.weak[c.id] });
+/* 크기 맞추기 + 고정 배경 그리기 */
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  if (!w || !h) return;
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  TP = w / (w < 520 ? 9 : 11);
+  cv.width = Math.round(w * DPR); cv.height = Math.round(h * DPR);
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+  buildLayer();
+}
+window.addEventListener('resize', () => { if (screen === 'world') resize(); });
+function rnd(seed) { let s = seed; return () => (s = (s * 9301 + 49297) % 233280) / 233280; }
+function buildLayer() {
+  const u = TP * DPR;
+  layer = document.createElement('canvas'); layer.width = Math.ceil(MAP_W * u); layer.height = Math.ceil(MAP_H * u);
+  const g = layer.getContext('2d');
+  const each = (fn) => { for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) fn(x, y, MAP[y][x]); };
+  const C = (x, y) => [(x + .5) * u, (y + .5) * u];
+  const circ = (cx, cy, r, col) => { g.fillStyle = col; g.beginPath(); g.arc(cx, cy, r, 0, 7); g.fill(); };
+  const r = rnd(7);
+  // 풀밭
+  g.fillStyle = '#e4f4d0'; g.fillRect(0, 0, layer.width, layer.height);
+  each((x, y) => { for (let i = 0; i < 3; i++) { g.fillStyle = i ? '#d3ecbc' : '#f1fae6'; g.beginPath(); g.ellipse((x + r()) * u, (y + r()) * u, u * .07, u * .04, 0, 0, 7); g.fill(); } });
+  // 운동장
+  g.fillStyle = '#f6d6ae'; g.beginPath(); g.roundRect(18 * u, 13 * u, 12 * u, 4 * u, u * 1.6); g.fill();
+  g.strokeStyle = '#fff'; g.lineWidth = u * .08; g.beginPath(); g.roundRect(18.5 * u, 13.5 * u, 11 * u, 3 * u, u * 1.3); g.stroke();
+  g.beginPath(); g.moveTo(24 * u, 13.5 * u); g.lineTo(24 * u, 16.5 * u); g.stroke();
+  // 길 (둥글게 이어서)
+  const isPath = (x, y) => tileAt(x, y) === '=' || (tileAt(x, y) === 'G');
+  [['#ecd2ab', .5], ['#f8e6c8', .42]].forEach(([col, rr]) => each((x, y) => {
+    if (!isPath(x, y)) return; const [cx, cy] = C(x, y); circ(cx, cy, u * rr, col);
+    g.fillStyle = col;
+    if (isPath(x + 1, y)) g.fillRect(cx, cy - u * rr, u, u * rr * 2);
+    if (isPath(x, y + 1)) g.fillRect(cx - u * rr, cy, u * rr * 2, u);
+  }));
+  // 연못
+  [['#b9dcf6', .62], ['#d3ebfc', .48]].forEach(([col, rr]) => each((x, y) => { if (MAP[y][x] === '~') { const [cx, cy] = C(x, y); circ(cx, cy, u * rr, col); } }));
+  // 꽃
+  each((x, y) => { if (MAP[y][x] !== 'f') return; for (let i = 0; i < 3; i++) { const fx = (x + .2 + r() * .6) * u, fy = (y + .2 + r() * .6) * u, col = ['#ffadb8', '#fff', '#ffd36e'][i];
+    for (let k = 0; k < 5; k++) circ(fx + Math.cos(k * 1.26) * u * .07, fy + Math.sin(k * 1.26) * u * .07, u * .06, col); circ(fx, fy, u * .04, '#f2a03b'); } });
+  // 수풀 (과마다 꽃 색이 다름)
+  const BUSH = { 1: ['#9fd88a', '#ffadb8'], 2: ['#8fd3a8', '#ffd36e'], 3: ['#a8d98a', '#ffffff'], 4: ['#97cf9f', '#c8b4f0'] };
+  each((x, y) => { const t = MAP[y][x]; if (!isBush(t)) return; const [cx, cy] = C(x, y); circ(cx, cy + u * .08, u * .56, '#bfe3a6'); });
+  each((x, y) => {
+    const t = MAP[y][x]; if (!isBush(t)) return; const [base, fl] = BUSH[t]; const [cx, cy] = C(x, y);
+    [[-.22, .05], [.22, .05], [0, -.15]].forEach(([dx, dy]) => circ(cx + dx * u, cy + dy * u, u * .3, base));
+    circ(cx - u * .1, cy - u * .22, u * .1, 'rgba(255,255,255,.35)');
+    for (let i = 0; i < 3; i++) circ(cx + (r() - .5) * u * .7, cy + (r() - .5) * u * .5, u * .055, fl);
   });
-  return list;
+  // 표지판
+  each((x, y) => { if (MAP[y][x] !== 'S') return; g.fillStyle = '#c99a6b'; g.fillRect((x + .45) * u, (y + .4) * u, u * .1, u * .5);
+    g.fillStyle = '#e8c08f'; g.beginPath(); g.roundRect((x + .12) * u, (y + .15) * u, u * .76, u * .38, u * .08); g.fill();
+    g.fillStyle = '#8a5a30'; g.font = `${u * .2}px Jua, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('📋', (x + .5) * u, (y + .34) * u); });
+  // 정문
+  g.fillStyle = '#ff8a7a'; g.beginPath(); g.roundRect(13.6 * u, 28.4 * u, .5 * u, 1.6 * u, u * .1); g.roundRect(17.9 * u, 28.4 * u, .5 * u, 1.6 * u, u * .1); g.fill();
+  g.beginPath(); g.roundRect(13.3 * u, 28.2 * u, 5.4 * u, .55 * u, u * .2); g.fill();
+  g.fillStyle = '#fff'; g.font = `bold ${u * .32}px 'Noto Sans SC', sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('星光中学', 16 * u, 28.48 * u);
+  // 건물
+  BUILDINGS.forEach(b => {
+    const x = b.x * u, y = b.y * u, w = b.w * u, h = b.h * u, dx = (b.door[0] + .5) * u;
+    g.fillStyle = 'rgba(0,0,0,.06)'; g.beginPath(); g.ellipse(x + w / 2, y + h, w * .52, u * .25, 0, 0, 7); g.fill();
+    g.fillStyle = b.wall; g.strokeStyle = '#e8d9c2'; g.lineWidth = u * .06; g.beginPath(); g.roundRect(x + u * .1, y + h * .38, w - u * .2, h * .62, u * .25); g.fill(); g.stroke();
+    g.fillStyle = b.roof; g.beginPath(); g.moveTo(x - u * .1, y + h * .46); g.quadraticCurveTo(x + w / 2, y - h * .18, x + w + u * .1, y + h * .46); g.closePath(); g.fill();
+    g.fillStyle = 'rgba(255,255,255,.25)'; g.beginPath(); g.moveTo(x + u * .3, y + h * .36); g.quadraticCurveTo(x + w / 2, y - h * .02, x + w - u * .3, y + h * .36); g.lineTo(x + w - u * .3, y + h * .3); g.quadraticCurveTo(x + w / 2, y - h * .1, x + u * .3, y + h * .3); g.fill();
+    for (let wx = x + u * .5; wx < x + w - u * .8; wx += u * 1.1) { if (Math.abs(wx + u * .3 - dx) < u * .8) continue; g.fillStyle = '#cfe8ff'; g.beginPath(); g.roundRect(wx, y + h * .55, u * .6, u * .5, u * .1); g.fill(); }
+    g.fillStyle = '#e0a676'; g.beginPath(); g.roundRect(dx - u * .32, y + h - u * .78, u * .64, u * .78, [u * .3, u * .3, 0, 0]); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.roundRect(x + w / 2 - u * 1.1, y + h * .3, u * 2.2, u * .5, u * .25); g.fill();
+    g.fillStyle = '#4b3b5c'; g.font = `bold ${u * .3}px 'Noto Sans SC', sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(b.name, x + w / 2, y + h * .3 + u * .26);
+  });
+  // 나무 (위에서 아래로 겹치게)
+  each((x, y) => { if (MAP[y][x] !== 'T') return; const [cx, cy] = C(x, y);
+    g.fillStyle = 'rgba(60,90,40,.10)'; g.beginPath(); g.ellipse(cx, cy + u * .38, u * .45, u * .14, 0, 0, 7); g.fill();
+    circ(cx, cy, u * .6, '#9fd487'); circ(cx - u * .18, cy - u * .2, u * .26, '#bfe6a6'); });
 }
-function sceneSub(no) { return no <= 4 ? `수상한 질문 ${no} · ${lessonOf(no).title}` : '중간 수사 회의'; }
-function openScene(no) {
-  screen = 'scene'; curScene = no; save.here = no; persist();
-  Sound.bgm('map');
-  topBar(Pic.SCENES[no].name, sceneSub(no), true);
-  stage.innerHTML = `<div class="scene-box"><div class="scene-frame">${Pic.scene(no)}</div></div>`;
-  stage.querySelector('.npc-fig').onclick = () => { if (!busy) run(() => tapNpc(no)); };
-  notes = no <= 4 ? buildNotes(no) : [];
-  drawNotes(); drawTray();
-  if (no <= 4 && save.L[no] === 0) run(() => startLesson(no));
-  if (no === 5 && !save.boss) run(bossMeeting);
+
+/* 그리기 */
+function camera() {
+  const vw = cv.width / DPR / TP, vh = cv.height / DPR / TP;
+  const cx = player.fx + .5 - vw / 2, cy = player.fy + .5 - vh / 2;
+  return [Math.max(0, Math.min(MAP_W - vw, cx)), Math.max(0, Math.min(MAP_H - vh, cy))];
 }
-function drawNotes() {
-  const svg = stage.querySelector('.scene-svg'); if (!svg) return;
-  svg.querySelectorAll('.clue').forEach(n => n.remove());
-  notes.forEach((n, i) => {
-    const [x, y] = n.spot;
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.setAttribute('class', 'clue'); g.dataset.i = i;
-    g.innerHTML = `<circle class="halo" cx="${x}" cy="${y}" r="14" fill="${n.again ? '#ff9d7a' : '#ffd36e'}" opacity=".5"/>
-      <g class="wig"><rect x="${x - 11}" y="${y - 9}" width="22" height="18" rx="2" fill="${n.again ? '#ffcfb0' : '#fff6c8'}" stroke="#d9b48a" stroke-width="1.5"/>
-      <path d="M${x + 5} ${y - 9} L${x + 11} ${y - 3} L${x + 5} ${y - 3} Z" fill="#e8d4b0"/>
-      <text x="${x - 1}" y="${y + 5}" text-anchor="middle" font-size="13" font-weight="700" fill="${n.again ? '#d9443c' : '#b07a45'}">${n.again ? '!' : '?'}</text></g>
-      <rect x="${x - 20}" y="${y - 20}" width="40" height="40" fill="transparent"/>`;
-    g.onclick = () => { if (!busy) run(() => openNote(n)); };
-    svg.appendChild(g);
+function frameOf(o, now) { if (!o.moving) return 0; const p = (now - o.moving.t0) / MOVE_MS; return p < .5 ? (o.alt ? 1 : 2) : 0; }
+function drawWorld(now) {
+  if (!layer) return;
+  const u = TP * DPR, [cx, cy] = camera();
+  ctx.fillStyle = '#cfe9b8'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(layer, -cx * u, -cy * u);
+  const S = (x, y) => [(x - cx) * u, (y - cy) * u];
+  // 잠긴 대나무 문
+  npcs.filter(n => n.kind === 'gate' && npcVisible(n)).forEach(n => {
+    const [x, y] = S(n.x, n.y);
+    ctx.fillStyle = '#9ccf7e'; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.roundRect(x + u * (.06 + i * .23), y + u * .05, u * .18, u * .9, u * .08); ctx.fill(); }
+    ctx.fillStyle = '#7fb866'; ctx.fillRect(x, y + u * .3, u, u * .08); ctx.fillRect(x, y + u * .65, u, u * .08);
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x + u * .5, y + u * .5, u * .26, 0, 7); ctx.fill();
+    ctx.font = `${u * .3}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🔒', x + u * .5, y + u * .52);
+  });
+  // 누른 곳 표시
+  if (tapMark && now - tapMark.t < 600) { const [x, y] = S(tapMark.x, tapMark.y); ctx.strokeStyle = `rgba(255,170,90,${1 - (now - tapMark.t) / 600})`; ctx.lineWidth = u * .06; ctx.beginPath(); ctx.ellipse(x + u / 2, y + u * .8, u * .35, u * .15, 0, 0, 7); ctx.stroke(); }
+  // 사람 (아래쪽이 앞)
+  const people = npcs.filter(n => n.kind !== 'gate').concat([Object.assign(player, { look: save.look })]).sort((a, b) => a.fy - b.fy);
+  people.forEach(o => {
+    const [x, y] = S(o.fx, o.fy);
+    if (x < -u || y < -2 * u || x > cv.width + u || y > cv.height + u) return;
+    const im = Picimg(o.look, o.dir, frameOf(o, now));
+    const w = u * .95, h = w * 122 / 60;
+    if (im.complete && im.naturalWidth) ctx.drawImage(im, x + (u - w) / 2, y + u - h + u * .05, w, h);
+    const tx = Math.round(o.fx), ty = Math.round(o.fy);
+    if (isBush(tileAt(tx, ty))) {   // 수풀에 서 있으면 다리가 가려짐
+      const [bx, by] = S(tx, ty); const col = { 1: '#9fd88a', 2: '#8fd3a8', 3: '#a8d98a', 4: '#97cf9f' }[tileAt(tx, ty)];
+      ctx.fillStyle = col; [[.25, .82], [.5, .78], [.75, .82]].forEach(([a, b]) => { ctx.beginPath(); ctx.arc(bx + a * u, by + b * u, u * .24, 0, 7); ctx.fill(); });
+    }
+  });
+  // 이야기 친구 머리 위 표시
+  npcs.forEach(n => {
+    if (!n.lesson || !save.intro) return;
+    const st = save.L[n.lesson]; if (!unlocked(n.lesson) || st === 3 || (st === 1 && caughtIn(n.lesson) < 6)) return;
+    const [x, y] = S(n.fx, n.fy); const by = y - u * 1.15 + Math.sin(now / 220) * u * .06;
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#ffd36e'; ctx.lineWidth = u * .06; ctx.beginPath(); ctx.arc(x + u / 2, by, u * .26, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.font = `${u * .3}px Jua, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e8574f'; ctx.fillText(st === 0 ? '!' : '💬', x + u / 2, by + u * .02);
+  });
+  // 바스락! (수풀에서 무언가 나올 때)
+  if (pop) {
+    const [x, y] = S(player.fx, player.fy), t = Math.min(1, (now - pop) / 300);
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#4b3b5c'; ctx.lineWidth = u * .04;
+    ctx.beginPath(); ctx.roundRect(x - u * .2, y - u * 1.6 - t * u * .1, u * 1.4, u * .5, u * .25); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#4b3b5c'; ctx.font = `${u * .26}px Jua, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('바스락!', x + u * .5, y - u * 1.35 - t * u * .1);
+  }
+}
+const Picimg = (look, dir, frame) => Pic.personImg(look, { dir, frame });
+/* 미리 그림 불러오기 */
+function preload() { ['boy', 'girl', 'teacher', 'guard', 'liming', 'chenchen', 'xiaoyu', 'wanghao', 'kid', 'kid2'].forEach(l => ['down', 'up', 'left', 'right'].forEach(d => [0, 1, 2].forEach(f => Picimg(l, d, f)))); }
+
+/* 움직임 */
+function startMove(o, dir) {
+  const [dx, dy] = DIRV[dir]; o.dir = dir;
+  if (blocked(o.x + dx, o.y + dy, o)) return false;
+  o.moving = { tx: o.x + dx, ty: o.y + dy, t0: performance.now() }; o.alt ^= 1; return true;
+}
+function updateMover(o, now) {
+  if (!o.moving) { o.fx = o.x; o.fy = o.y; return false; }
+  const p = Math.min(1, (now - o.moving.t0) / MOVE_MS);
+  o.fx = o.x + (o.moving.tx - o.x) * p; o.fy = o.y + (o.moving.ty - o.y) * p;
+  if (p >= 1) { o.x = o.moving.tx; o.y = o.moving.ty; o.moving = null; o.fx = o.x; o.fy = o.y; return true; }
+  return false;
+}
+const heldDir = () => ['up', 'down', 'left', 'right'].find(d => held[d]);
+function dirTo(x, y) { return x > player.x ? 'right' : x < player.x ? 'left' : y > player.y ? 'down' : 'up'; }
+function free() { return screen === 'world' && !busy && !handlers.length; }
+function worldUpdate(now) {
+  const arrived = updateMover(player, now);
+  if (arrived) onArrive();
+  if (!player.moving && free()) {
+    let d = heldDir(), fromPath = false;
+    if (d) { path = []; pendingAct = null; }
+    else if (path.length) { d = dirTo(path[0][0], path[0][1]); fromPath = true; }
+    if (d) {
+      const [dx, dy] = DIRV[d], tx = player.x + dx, ty = player.y + dy;
+      const door = BUILDINGS.find(b => b.door[0] === tx && b.door[1] === ty);
+      if (door && d === 'up' && !fromPath) { player.dir = 'up'; enterDoor(door); }
+      else if (startMove(player, d)) { if (fromPath) path.shift(); }
+      else { player.dir = d; path = []; if (!fromPath && now - lastBump > 350) { Sound.sfx('blip'); lastBump = now; } }
+    } else if (pendingAct) { const a = pendingAct; pendingAct = null; player.dir = dirTo(a.x, a.y); interactAt(a.x, a.y); }
+  }
+  npcs.forEach(n => {
+    if (n.kind === 'gate') return;
+    updateMover(n, now);
+    if (n.wander && !n.moving && now > n.next && free()) {
+      n.next = now + 1800 + Math.random() * 3000;
+      const d = shuffle(['up', 'down', 'left', 'right'])[0], [dx, dy] = DIRV[d];
+      if (Math.abs(n.x + dx - n.ox) <= 2 && Math.abs(n.y + dy - n.oy) <= 2 && !isBush(tileAt(n.x + dx, n.y + dy))) startMove(n, d); else n.dir = d;
+    }
   });
 }
-function drawTray() {
-  if (screen !== 'scene') return;
-  const no = curScene;
-  if (no === 5) {
-    tray.innerHTML = `<div class="notebook"><div class="nb-head"><span>📚 중간 수사 회의</span><span>${save.boss ? '✓ 완료' : ''}</span></div>
-      <button class="big ${save.boss ? 'mint' : ''}">${save.boss ? '🔁 회의 다시 하기' : '💬 진아쌤과 회의 시작'}</button></div>`;
-    tray.querySelector('.big').onclick = () => run(bossMeeting);
+function loop(now) {
+  if (screen === 'world') { worldUpdate(now); drawWorld(now); }
+  requestAnimationFrame(loop);
+}
+
+/* 누른 곳까지 길 찾기 */
+function bfs(goals) {
+  const key = (x, y) => x + ',' + y, goal = new Set(goals.map(([x, y]) => key(x, y)));
+  if (goal.has(key(player.x, player.y))) return [];
+  const prev = new Map([[key(player.x, player.y), null]]), q = [[player.x, player.y]];
+  while (q.length) {
+    const [x, y] = q.shift();
+    for (const [dx, dy] of Object.values(DIRV)) {
+      const nx = x + dx, ny = y + dy, k = key(nx, ny);
+      if (prev.has(k) || blocked(nx, ny, player)) continue;
+      prev.set(k, [x, y]);
+      if (goal.has(k)) { const out = [[nx, ny]]; let c = [x, y]; while (c && key(...c) !== key(player.x, player.y)) { out.unshift(c); c = prev.get(key(...c)); } return out; }
+      q.push([nx, ny]);
+    }
+  }
+  return null;
+}
+function interesting(x, y) {
+  return npcAt(x, y) || BUILDINGS.some(b => b.door[0] === x && b.door[1] === y) || 'S~G'.includes(tileAt(x, y));
+}
+cv.addEventListener('pointerdown', e => {
+  Sound.init();
+  if (!free()) return;
+  const r = cv.getBoundingClientRect(), [cx, cy] = camera();
+  const x = Math.floor((e.clientX - r.left) / TP + cx), y = Math.floor((e.clientY - r.top) / TP + cy);
+  tapMark = { x, y, t: performance.now() };
+  if (interesting(x, y)) {
+    const door = BUILDINGS.find(b => b.door[0] === x && b.door[1] === y);
+    const goals = door ? [[x, y + 1]] : Object.values(DIRV).map(([dx, dy]) => [x + dx, y + dy]).filter(([a, b]) => !solid(a, b));
+    const p = bfs(goals); if (p === null) return;
+    path = p; pendingAct = { x, y };
+  } else if (!blocked(x, y, player)) { const p = bfs([[x, y]]); if (p) { path = p; pendingAct = null; } }
+});
+
+function onArrive() {
+  save.x = player.x; save.y = player.y; save.dir = player.dir; persist();
+  stepsSince++;
+  updateTop();
+  const t = tileAt(player.x, player.y);
+  if (!isBush(t)) return;
+  const z = +t;
+  if (save.L[z] < 1) {
+    if (!save.quiet[z]) { save.quiet[z] = 1; persist(); path = []; run(() => say({ t: `수풀이 조용하다…\n먼저 ${NPC_NAME[z]}과 이야기해 보자!` })); }
     return;
   }
-  const L = lessonOf(no), st = save.L[no];
-  const slots = L.chunks.map(c => (save.caught[c.id] && !save.weak[c.id]) ? sealHTML(c) : `<div class="slot">${save.weak[c.id] ? '!' : '?'}</div>`).join('');
-  let action = '';
-  if (st === 0) action = `<div class="hint">${NPC_NAME[no]}을 눌러 이야기를 들어 봐요</div>`;
-  else if (st === 1 && caughtIn(no) < 6) action = `<div class="hint">장면 속에 숨은 <b>단서 쪽지</b>를 찾아 눌러 봐요!${notes.some(n => n.again) ? '<br>🟠 날아간 쪽지도 다시 찾아요.' : ''}</div>`;
-  else if (st < 3) action = `<button class="big" data-a="chat">💬 ${NPC_NAME[no]}과 1분 대화하기</button>`;
-  else action = `<div class="btnrow"><button class="big ghost" data-a="review">🔁 복습 퀴즈</button><button class="big ghost" data-a="diary">📔 일기 ${no}쪽</button></div>
-    ${notes.length ? '<div class="hint">🟠 오답 쪽지가 숨어 있어요. 찾아서 다시 풀어요!</div>' : ''}`;
-  tray.innerHTML = `<div class="notebook"><div class="nb-head"><span>🗂 사건 파일 ${no}</span><span>도장 ${caughtIn(no)}/6</span></div>
-    <div class="seals">${slots}</div>${action}</div>`;
-  tray.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
-    const k = b.dataset.a;
-    if (k === 'chat') run(() => tapNpc(no));
-    if (k === 'review') run(() => reviewLesson(no));
-    if (k === 'diary') run(() => pageCard(no));
-  });
-  // 친구 머리 위 말풍선
-  const svg = stage.querySelector('.scene-svg'); if (!svg) return;
-  svg.querySelectorAll('.talk-ic').forEach(x => x.remove());
-  if (st === 0 || (st < 3 && caughtIn(no) === 6)) {
-    const n = Pic.SCENES[no].npc, cx = n.x + 30 * n.s;
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g'); g.setAttribute('class', 'talk-ic');
-    g.innerHTML = `<g class="talkme"><circle cx="${cx}" cy="${n.y - 12}" r="13" fill="#fff" stroke="#ffd36e" stroke-width="3"/><text x="${cx}" y="${n.y - 7}" text-anchor="middle" font-size="14">${st === 0 ? '!' : '💬'}</text></g>`;
-    g.onclick = () => { if (!busy) run(() => tapNpc(no)); };
-    svg.appendChild(g);
+  // 오답 카드 헷갈이는 몇 걸음 뒤 꼭 다시 나타남
+  let forced = null;
+  lessonOf(z).chunks.forEach(c => { if (save.weak[c.id]) { save.due[c.id] = Math.max(0, (save.due[c.id] ?? 4) - 1); if (save.due[c.id] === 0 && !forced) forced = c; } });
+  const rate = caughtIn(z) < 6 ? .22 : .12;
+  if (forced || (stepsSince >= 3 && Math.random() < rate)) {
+    stepsSince = 0; path = []; pendingAct = null;
+    const c = forced || pickWild(z);
+    run(() => encounter(c));
   }
 }
-function refresh() {
-  if (screen === 'scene') { topBar(Pic.SCENES[curScene].name, sceneSub(curScene), true); drawTray(); }
-  if (screen === 'map') showMap();
+let lastWild = null;
+function pickWild(z) {
+  const cs = lessonOf(z).chunks;
+  const w = cs.map(c => (save.weak[c.id] ? 4 : save.caught[c.id] ? 1 : 3) * (c.id === lastWild ? .2 : 1));
+  let r = Math.random() * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < cs.length; i++) { r -= w[i]; if (r <= 0) return cs[i]; }
+  return cs[0];
 }
 
-/* ───────── 이야기 ───────── */
-async function startLesson(no) {
-  await say(lessonOf(no).intro);
-  save.L[no] = 1; persist();
-  await say({ t: '🔍 이 장면 어딘가에 단서 쪽지 6장이 숨어 있어요.\n쪽지를 찾아 누르고, 문제를 풀면 도장을 받아요!' });
-  notes = buildNotes(no); drawNotes();
+/* 말 걸기 · 문 */
+function interact() { if (!free() || player.moving) return; const [dx, dy] = DIRV[player.dir]; interactAt(player.x + dx, player.y + dy); }
+function interactAt(x, y) {
+  const n = npcAt(x, y);
+  if (n) { if (n.kind !== 'gate') n.dir = { up: 'down', down: 'up', left: 'right', right: 'left' }[player.dir]; run(() => talk(n)); return; }
+  const door = BUILDINGS.find(b => b.door[0] === x && b.door[1] === y);
+  if (door) return enterDoor(door);
+  const t = tileAt(x, y);
+  if (t === 'S') return run(() => say({ t: '📋 ' + (SIGNS[x + ',' + y] || '星光中学') }));
+  if (t === '~') return run(() => say([{ t: '연못 속에서 물고기가 헤엄쳐요.' }, { zh: '鱼！', py: 'yú', ko: '물고기!' }]));
+  if (t === 'G') return run(() => say({ t: '星光中学 정문이야. 지금은 학교 안을 수사하자!' }));
 }
-async function tapNpc(no) {
-  if (no === 5) return save.boss ? say({ who: '진아쌤', t: '수사 회의 결과는 메뉴 → 비밀 일기에서 다시 볼 수 있어.' }) : bossMeeting();
+function enterDoor(b) {
+  run(async () => {
+    Sound.sfx('door');
+    if (b.id === 'lib') { if (save.L[4] === 3) return bossMeeting(); return say({ t: '图书馆 (도서관) — 문이 잠겨 있다.\n4과 사건까지 해결하면 열린대.' }); }
+    await say({ t: { dorm: '宿舍 (기숙사) — 住校 학생만 들어갈 수 있대요!', shop: '小卖部 (매점) — 오늘은 문을 닫았어요.', class: '教学楼 (교실동) — 안은 午休 시간이라 조용해요… 쉿!' }[b.id] });
+  });
+}
+async function talk(n) {
+  if (n.kind === 'gate') return say([{ t: `🔒 대나무 문이 잠겨 있다.` }, { t: `${n.gate}과 비밀 일기를 찾으면 열려요.\n(${NPC_NAME[n.gate]}의 사건을 해결해 보자!)` }]);
+  if (n.lesson) return talkLesson(n.lesson);
+  if (n.id === 'teacher') return talkTeacher();
+  if (n.lines) return say(n.lines.map(l => Object.assign({ who: n.name }, l)));
+}
+
+/* ───────── 위·아래 막대 ───────── */
+function questText() {
+  for (let n = 1; n <= 4; n++) {
+    const st = save.L[n], L = lessonOf(n);
+    if (st === 3) continue;
+    if (st === 0) return `🎯 ${n}과 · ${NPC_NAME[n]} 만나러 가자`;
+    if (caughtIn(n) < 6) return `🌿 ${n}과 · ${L.zone.replace('풀숲', '수풀')}에서 헷갈이 찾기`;
+    return `💬 ${n}과 · ${NPC_NAME[n]}에게 가서 대화하기`;
+  }
+  if (!save.boss) return '📚 도서관(图书馆)에서 중간 수사 회의!';
+  const w = weakList().length;
+  return w ? `🃏 오답 카드 ${w}장 — 수풀에서 다시 만나요` : '🎉 1~4과 수사 완료!';
+}
+function curLesson() { for (let n = 1; n <= 4; n++) if (save.L[n] < 3) return n; return 0; }
+function updateTop() {
+  if (screen !== 'world') return;
+  topEl.innerHTML = `<span style="font-size:6.4cqw">🔍</span><div class="ttl">진담 수사대<small>${esc(zoneName())}</small></div>
+    <span class="chip">💡 ${save.candy}</span><button class="ib" data-a="menu">☰</button>`;
+  topEl.querySelector('[data-a="menu"]').onclick = () => openMenu();
+}
+function drawTray() {
+  if (screen !== 'world') return;
+  const no = curLesson();
+  const seals = no ? lessonOf(no).chunks.map(c => (save.caught[c.id] && save.weak[c.id] === undefined) ? `<div data-id="${c.id}">${sealHTML(c)}</div>` : `<div class="slot" data-id="${c.id}">${save.weak[c.id] ? '!' : '?'}</div>`).join('') : '';
+  tray.innerHTML = `<div class="notebook"><div class="nb-head"><span>${esc(questText())}</span>${no ? `<span>도장 ${caughtIn(no)}/6</span>` : ''}</div>
+    ${no ? `<div class="seals">${seals}</div>` : ''}</div>`;
+}
+function refresh() { updateTop(); drawTray(); }
+function enterWorld() {
+  screen = 'world'; Sound.bgm('map');
+  stage.innerHTML = ''; stage.appendChild(cv);
+  refresh(); requestAnimationFrame(resize);
+}
+
+/* 이야기 장면 그림 (과 시작할 때 위쪽에 보여 줌) */
+async function withPicture(no, fn) {
+  const p = el(`<div class="storypic">${Pic.scene(no)}</div>`); uiRoot.appendChild(p);
+  try { await fn(); } finally { p.remove(); }
+}
+async function startLesson(no) {
+  await withPicture(no, () => say(lessonOf(no).intro));
+  save.L[no] = 1; persist(); drawTray();
+  await say({ t: `🌿 ${lessonOf(no).zone.replace('풀숲', '수풀')}에 헷갈이 6마리가 단서 쪽지를 들고 숨어 있어요.\n수풀을 걸어 다니다 헷갈이를 만나면, 중국어로 안개를 걷어 내요!` });
+}
+async function talkLesson(no) {
   const L = lessonOf(no), st = save.L[no];
   if (st === 0) return startLesson(no);
-  if (st === 1 && caughtIn(no) < 6) return say([Object.assign({ who: NPC_NAME[no] }, L.waiting), { t: `단서 쪽지가 아직 ${6 - caughtIn(no)}장 남았어요.` }]);
+  if (st === 1 && caughtIn(no) < 6) return say([Object.assign({ who: NPC_NAME[no] }, L.waiting), { t: `도장이 아직 ${6 - caughtIn(no)}개 남았어요. 수풀을 더 찾아보자!` }]);
   if (st < 3) {
     save.L[no] = 2; persist();
     await say(Object.assign({}, L.battleStart, { who: NPC_NAME[no] }));
@@ -270,7 +482,7 @@ async function tapNpc(no) {
 async function talkTeacher() {
   const w = weakList().length;
   const lines = [{ who: '진아쌤', t: '지금 할 일: ' + questText().replace(/^\S+\s/, '') }];
-  if (w) lines.push({ who: '진아쌤', t: `오답 카드가 ${w}장 있어. 메뉴(☰) → 오답 카드에서 바로 다시 풀 수 있어. 틀려도 괜찮아, 모른 채 지나가지만 않으면 돼!` });
+  if (w) lines.push({ who: '진아쌤', t: `오답 카드가 ${w}장 있어. 수풀에서 다시 만나면 꼭 이기자! 메뉴(☰) → 오답 카드에서 바로 풀 수도 있어.\n틀려도 괜찮아, 모른 채 지나가지만 않으면 돼.` });
   if (save.boss) lines.push({ who: '진아쌤', t: '5~8과 비밀 일기는 다음 업데이트에서 이어져요.' });
   lines.push({ who: '진아쌤', zh: '加油！', py: 'Jiāyóu!', ko: '힘내!' });
   await say(lines);
@@ -291,11 +503,11 @@ function distractors(c, n = 3) {
   return shuffle(pool).slice(0, n);
 }
 const exText = c => c.ex.join('') + (c.end || '');
-function quiz(c, type = quizType(c)) {
+function quiz(c, type = quizType(c), opt = {}) {
   return new Promise(resolve => {
     const opts = shuffle([c].concat(distractors(c)));
     const NAME = { k2z: '뜻 → 중국어', z2k: '중국어 → 뜻', listen: '듣고 고르기', fill: '빈칸 채우기', order: '문장 조립' };
-    const head = `<div class="qhead"><span>🔍 단서 쪽지 · ${NAME[type]}</span><button class="mini hintb" style="margin:0">💡 힌트 ${save.candy}</button></div>`;
+    const head = `<div class="qhead"><span>${opt.inBattle ? '🗣' : '🃏'} ${NAME[type]}</span><button class="mini hintb" style="margin:0">💡 힌트 ${save.candy}</button></div>`;
     const hzBtn = o => `<button class="btn" data-id="${o.id}"><span class="bz">${esc(o.hz)}</span>${set.py && type !== 'listen' ? `<span class="bp">${esc(o.py)}</span>` : ''}</button>`;
     let main = '', optHTML = '';
     if (type === 'k2z') { main = `<div class="bigtxt">"${esc(c.ko)}"</div><div class="small">알맞은 중국어 덩어리를 골라요</div>`; optHTML = opts.map(hzBtn).join(''); }
@@ -307,7 +519,7 @@ function quiz(c, type = quizType(c)) {
       optHTML = opts.map(hzBtn).join('');
     }
     if (type === 'order') main = `<div class="ko" style="font-size:4.2cqw">"${esc(c.exKo)}"</div><div class="small">조각을 순서대로 눌러 문장을 만들어요</div><div class="tiles ans"></div><div class="tiles pool"></div>`;
-    const p = card(`${head}<div class="qmain">${main}</div>${optHTML ? `<div class="opts c2">${optHTML}</div>` : ''}`, 'clue-card');
+    const p = card(`${head}<div class="qmain">${main}</div>${optHTML ? `<div class="opts c2">${optHTML}</div>` : ''}`, opt.inBattle ? 'clue-card low' : 'clue-card', !opt.inBattle);
     const sp = p.querySelector('.sp'); if (sp) sp.onclick = () => speak(c);
     if (type === 'z2k' || type === 'listen') speak(c);
     let done = false, nav;
@@ -368,7 +580,7 @@ function chunkCard(c, kind) {
       <div>${badges}</div>
       <div class="zh" style="font-size:7.4cqw">${esc(c.hz)}</div><div class="py">${esc(c.py)}</div><div class="ko">${esc(c.ko)}</div>
       <div class="ex"><div class="zh">${esc(exText(c))}</div>${set.py ? `<div class="py">${esc(c.exPy)}</div>` : ''}<div class="ko">${esc(c.exKo)}</div></div>
-      <div class="say">${kind === 'miss' ? '앗, 쪽지가 바람에 날아갔어요! 소리 내어 따라 말해 보고, 날아간 쪽지를 다시 찾아요.' : '说出来！ 소리 내어 따라 말해 보세요.'}</div>
+      <div class="say">${kind === 'miss' ? '정답을 소리 내어 따라 말해 보세요. 헷갈이를 다시 만나면 꼭 이겨요!' : '说出来！ 소리 내어 따라 말해 보세요.'}</div>
       <div class="row"><button class="btn s1">🔊 덩어리</button><button class="btn s2">🔊 예문</button><button class="btn go">계속 ▶</button></div></div>`);
     p.querySelector('.s1').onclick = () => speak(c);
     p.querySelector('.s2').onclick = () => TTS.speak(c.exSay || exText(c));
@@ -379,48 +591,124 @@ function chunkCard(c, kind) {
   });
 }
 
-async function openNote(n) {
-  const c = CHUNK[n.id];
-  Sound.sfx('paper');
-  const wasWeak = !!save.weak[c.id], wasCaught = !!save.caught[c.id];
-  const ok = await quiz(c);
-  const g = stage.querySelector(`.clue[data-i="${notes.indexOf(n)}"]`);
-  if (ok) {
+
+/* ───────── 수풀 배틀: 헷갈이와 말 대결 ─────────
+   헷갈이(안개 요정)가 단서 쪽지를 들고 있음. 퀴즈를 맞히면 중국어 말풍선을 던져 안개를 걷어 냄.
+   안개가 다 걷히면 헷갈이 → 빨간 도장 '쾅!'. 틀리면 헷갈이가 쪽지를 들고 도망(오답 카드). */
+const FOG_COL = { 1: ['#e3dcf7', '#c9bdf0'], 2: ['#d6ebfb', '#b4d6f3'], 3: ['#fbdde6', '#f3bccd'], 4: ['#dff2e2', '#bfe3c6'] };
+const ZONE_BG = { 1: ['#fff4e8', '#e4f4d0'], 2: ['#eef6ff', '#dff1d6'], 3: ['#fff1e6', '#f6e3cf'], 4: ['#f1ecff', '#e2ecd8'] };
+const hetName = c => c.mon.replace(/몬$/, '') + ' 헷갈이';
+function hetgal(c) {
+  const [a, b] = FOG_COL[c.lesson] || FOG_COL[1];
+  let h = 0; for (const ch of c.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const hat = h % 4, eye = (h >> 3) % 3;
+  const eyes = eye === 0 ? `<ellipse cx="62" cy="70" rx="5" ry="7" fill="#4b3b5c"/><ellipse cx="88" cy="70" rx="5" ry="7" fill="#4b3b5c"/><circle cx="64" cy="67" r="2" fill="#fff"/><circle cx="90" cy="67" r="2" fill="#fff"/>`
+    : eye === 1 ? `<path d="M56 70 Q62 63 68 70 M82 70 Q88 63 94 70" stroke="#4b3b5c" stroke-width="3.5" fill="none" stroke-linecap="round"/>`
+    : `<circle cx="62" cy="70" r="7" fill="#fff" stroke="#4b3b5c" stroke-width="2"/><circle cx="88" cy="70" r="7" fill="#fff" stroke="#4b3b5c" stroke-width="2"/><circle cx="64" cy="71" r="3.4" fill="#4b3b5c"/><circle cx="90" cy="71" r="3.4" fill="#4b3b5c"/>`;
+  const hats = ['', `<path d="M52 34 Q75 10 98 34 Z" fill="#ff8a7a"/><circle cx="75" cy="16" r="5" fill="#ff8a7a"/>`,
+    `<path d="M75 30 Q60 6 72 4 Q80 14 75 30 Z" fill="#8fcf7a"/><path d="M76 30 Q92 10 98 18 Q88 26 76 30 Z" fill="#7cc06a"/>`,
+    `<rect x="58" y="22" width="34" height="10" rx="5" fill="#7fb2ec"/><rect x="64" y="8" width="22" height="18" rx="6" fill="#7fb2ec"/>`][hat];
+  return `<svg viewBox="0 0 150 150" class="het">
+    <ellipse cx="75" cy="140" rx="40" ry="6" fill="#000" opacity=".08"/>
+    <g class="het-body">
+      <path d="M30 110 Q10 108 16 88 Q8 66 30 58 Q32 32 58 34 Q75 18 94 34 Q120 30 122 56 Q144 64 134 88 Q140 110 118 110 Q110 124 92 118 Q75 128 58 118 Q40 124 30 110 Z" fill="${a}" stroke="${b}" stroke-width="4"/>
+      <circle cx="44" cy="62" r="8" fill="#fff" opacity=".6"/><circle cx="108" cy="92" r="5" fill="#fff" opacity=".5"/>
+      ${hats}${eyes}
+      <ellipse cx="52" cy="82" rx="7" ry="4" fill="#ffadb8" opacity=".8"/><ellipse cx="98" cy="82" rx="7" ry="4" fill="#ffadb8" opacity=".8"/>
+      <path d="M66 84 Q75 92 84 84" stroke="#4b3b5c" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <circle cx="75" cy="104" r="13" fill="#fff" opacity=".9"/><text x="75" y="110" text-anchor="middle" font-size="16" font-weight="700" fill="#4b3b5c" class="zh-svg">${esc(firstHan(c.hz))}</text>
+      <g class="het-note" transform="translate(118,96) rotate(12)"><rect x="-12" y="-10" width="24" height="20" rx="2" fill="#fff6c8" stroke="#d9b48a" stroke-width="1.5"/><text x="0" y="5" text-anchor="middle" font-size="13" font-weight="700" fill="#b07a45">?</text></g>
+    </g></svg>`;
+}
+
+function encounter(c) {
+  return new Promise(async resolve => {
+    lastWild = c.id;
+    const wasWeak = !!save.weak[c.id], wasCaught = !!save.caught[c.id];
+    const fresh = !wasCaught || wasWeak;
+    let hp = fresh ? 2 : 1;
+    const [bg1, bg2] = ZONE_BG[c.lesson] || ZONE_BG[1];
+    pop = performance.now(); Sound.sfx('paper'); await sleep(650); pop = null;
+    Sound.bgm('chat'); Sound.sfx('wind');
+    const B = el(`<div class="battle" style="--bg1:${bg1};--bg2:${bg2}">
+      <div class="b-head"><span>🌿 ${esc(zoneName())} 수풀</span><span class="fog">안개 ${'<i class="on"></i>'.repeat(hp)}</span></div>
+      <div class="b-stage">
+        <div class="b-bush l"></div><div class="b-bush r"></div><div class="b-vs"><div class="seal">查</div></div>
+        <div class="b-me"><svg viewBox="0 0 60 122">${Pic.person(save.look, { dir: 'right' })}</svg></div>
+        <div class="b-foe">${hetgal(c)}<div class="b-tag">${esc(hetName(c))}<small>${c.lesson}과 · ${wasWeak ? '🃏 오답 카드' : wasCaught ? '복습' : '✨ 처음 만남'}</small></div></div>
+        <div class="b-fx"></div>
+      </div>
+      <div class="b-panel"><div class="b-msg"></div><div class="b-cmd"></div></div></div>`);
+    uiRoot.appendChild(B);
+    const msgEl = B.querySelector('.b-msg'), cmd = B.querySelector('.b-cmd'), foe = B.querySelector('.b-foe'), fx = B.querySelector('.b-fx'), me = B.querySelector('.b-me');
+    const msg = async (t, wait = 900) => { msgEl.textContent = nm(t); await sleep(wait); };
+    const choose = (labels) => new Promise(res => {
+      cmd.innerHTML = labels.map((l, i) => `<button class="btn" data-i="${i}">${l}</button>`).join('');
+      const nav = navigate(cmd, { cols: 2, start: 0 });
+      cmd.querySelectorAll('.btn').forEach(b => b.onclick = () => { nav.stop(); cmd.innerHTML = ''; Sound.sfx('sel'); res(+b.dataset.i); });
+    });
+    const close = () => { B.classList.add('out'); setTimeout(() => B.remove(), 350); Sound.bgm('map'); };
+    await sleep(500);
+    await msg(wasWeak ? `또 만났다! 오답 카드의 ${hetName(c)}!` : wasCaught ? `${hetName(c)}이 다시 나타났다! 복습 대결!` : `수풀에서 ${hetName(c)}이 쪽지를 들고 튀어나왔다!`, 1100);
+    let firstType = null;
+    while (hp > 0) {
+      msgEl.textContent = hp === 2 ? '중국어로 안개를 걷어 내자!' : (fresh ? '한 번 더! 안개가 조금 남았어.' : '중국어로 안개를 걷어 내자!');
+      const k = await choose(['🗣 중국어로 맞서기', '🏃 수풀로 돌아가기']);
+      if (k === 1) {
+        await msg('살금살금… 수풀로 돌아왔다.', 700);
+        if (wasWeak) save.due[c.id] = 2;
+        persist(); close(); resolve(); return;
+      }
+      let type = quizType(c);
+      if (firstType && type === firstType) type = ({ k2z: 'listen', z2k: 'k2z', listen: 'fill', fill: (save.mastery[c.id] || 0) >= 1 ? 'order' : 'k2z', order: 'fill' })[type];
+      firstType = type;
+      B.classList.add('q');
+      const ok = await quiz(c, type, { inBattle: true });
+      B.classList.remove('q');
+      if (ok) {
+        // 말풍선 던지기
+        const bub = el(`<div class="b-shot">${esc(c.hz)}</div>`); fx.appendChild(bub);
+        me.classList.add('throw'); speak(c);
+        requestAnimationFrame(() => bub.classList.add('go'));
+        await sleep(650); bub.remove(); me.classList.remove('throw');
+        foe.classList.add('hit'); Sound.sfx('good');
+        for (let i = 0; i < 6; i++) fx.appendChild(el(`<i class="puff" style="--a:${i * 60}deg"></i>`));
+        setTimeout(() => { fx.querySelectorAll('.puff').forEach(p => p.remove()); foe.classList.remove('hit'); }, 700);
+        hp--; const fogs = B.querySelectorAll('.fog i.on'); if (fogs.length) fogs[fogs.length - 1].classList.remove('on');
+        await msg(hp ? '말이 통했다! 안개가 조금 걷혔다.' : '말이 통했다! 안개가 모두 걷혔다!', 900);
+      } else {
+        foe.classList.add('giggle'); Sound.sfx('bad');
+        await msg('헷갈이가 키득키득 웃는다…', 900);
+        foe.classList.add('run'); Sound.sfx('wind');
+        await msg(`${hetName(c)}이 쪽지를 들고 수풀로 도망갔다!`, 1000);
+        save.weak[c.id] = 1; save.due[c.id] = 4; save.mastery[c.id] = Math.max(0, (save.mastery[c.id] || 0) - 1); persist();
+        await chunkCard(c, 'miss');
+        await msg('🃏 오답 카드에 적었어. 수풀을 몇 걸음 걸으면 다시 나타날 거야!', 1400);
+        close(); drawTray(); resolve(); return;
+      }
+    }
+    // 이김 → 도장 쾅!
+    foe.classList.add('vanish');
+    await sleep(350);
+    const st = el(`<div class="b-stamp">${sealHTML(c)}<b>쾅!</b></div>`); fx.appendChild(st); Sound.sfx('stamp');
+    await sleep(900);
     save.caught[c.id] = (save.caught[c.id] || 0) + 1;
     save.mastery[c.id] = (save.mastery[c.id] || 0) + 1;
     let kind = wasCaught && !wasWeak ? 'again' : 'new';
-    if (wasWeak) { delete save.weak[c.id]; save.grad++; kind = 'grad'; }
-    save.catches++; if (save.catches % 3 === 0) { save.candy++; toast('💡 힌트 사탕 +1'); }
+    if (wasWeak) { delete save.weak[c.id]; delete save.due[c.id]; save.grad++; kind = 'grad'; }
+    if (fresh) { save.catches++; if (save.catches % 3 === 0) { save.candy++; toast('💡 힌트 사탕 +1'); } }
     persist();
-    notes = notes.filter(x => x !== n); drawNotes(); drawTray();
+    await msg(kind === 'grad' ? '오답 카드 졸업! 🎓 헷갈이가 도장으로 바뀌었다!' : '헷갈이가 도장으로 바뀌었다!', 700);
     await chunkCard(c, kind);
+    close(); drawTray();
     const no = c.lesson;
     if (save.L[no] === 1 && caughtIn(no) === 6) {
       save.L[no] = 2; persist(); drawTray();
-      await say({ t: `🗂 도장 6개를 모두 모았다!\n이제 ${NPC_NAME[no]}을 눌러 메신저로 대화해 보자.` });
+      await sleep(350);
+      await say({ t: `🗂 도장 6개를 모두 모았다!\n${NPC_NAME[no]}에게 돌아가서 대화해 보자.` });
     }
-  } else {
-    save.weak[c.id] = 1; save.mastery[c.id] = Math.max(0, (save.mastery[c.id] || 0) - 1); persist();
-    if (g) { g.classList.add('fly'); Sound.sfx('wind'); await sleep(650); }
-    await chunkCard(c, 'miss');
-    const S = Pic.SCENES[c.lesson];
-    const taken = new Set(notes.filter(x => x !== n).map(x => x.si));
-    const free = [...S.spots.keys()].filter(k => !taken.has(k) && k !== n.si);
-    n.si = shuffle(free)[0]; n.spot = S.spots[n.si]; n.again = true;
-    drawNotes(); drawTray();
-  }
-}
-async function reviewLesson(no) {
-  let right = 0;
-  await say({ t: `🔁 ${no}과 복습 퀴즈! 6문제를 풀어요. 틀린 덩어리는 오답 쪽지가 되어 장면에 숨어요.` });
-  for (const c of shuffle(lessonOf(no).chunks)) {
-    const ok = await quiz(c);
-    if (ok) { right++; save.mastery[c.id] = (save.mastery[c.id] || 0) + 1; }
-    else { save.weak[c.id] = 1; save.mastery[c.id] = Math.max(0, (save.mastery[c.id] || 0) - 1); }
-    persist();
-  }
-  notes = buildNotes(no); drawNotes();
-  await say({ t: `복습 끝! ${right} / 6 정답${right < 6 ? '\n🟠 오답 쪽지를 찾아서 다시 풀어 보자.' : ' 👏'}` });
+    resolve();
+  });
 }
 async function weakDrill() {
   const list = weakList();
@@ -428,12 +716,11 @@ async function weakDrill() {
   await say({ t: `🃏 오답 카드 ${list.length}장을 다시 풀어요. 맞히면 졸업!` });
   for (const c of list) {
     const ok = await quiz(c);
-    if (ok) { delete save.weak[c.id]; save.grad++; save.caught[c.id] = (save.caught[c.id] || 0) + 1; save.mastery[c.id] = (save.mastery[c.id] || 0) + 1; persist(); await chunkCard(c, 'grad'); }
+    if (ok) { delete save.weak[c.id]; delete save.due[c.id]; save.grad++; save.caught[c.id] = (save.caught[c.id] || 0) + 1; save.mastery[c.id] = (save.mastery[c.id] || 0) + 1; persist(); await chunkCard(c, 'grad'); }
     else { persist(); await chunkCard(c, 'miss'); }
   }
   const left = weakList().length;
-  await say({ t: left ? `아직 ${left}장 남았어요. 조금 뒤에 다시 만나요!` : '오답 카드를 모두 졸업시켰어요! 🎓' });
-  if (screen === 'scene' && curScene <= 4) { notes = buildNotes(curScene); drawNotes(); }
+  await say({ t: left ? `아직 ${left}장 남았어요. 수풀에서 다시 만나요!` : '오답 카드를 모두 졸업시켰어요! 🎓' });
 }
 
 /* ───────── 메신저 대화 ───────── */
@@ -549,22 +836,23 @@ function missionCard(label, text, sentence) {
   });
 }
 const NEXT_TIP = {
-  1: '지도에 2번 장소(교실동 2층)가 열렸어요!',
-  2: '지도에 3번 장소(매점 小卖部)가 열렸어요!',
-  3: '지도에 4번 장소(기숙사 宿舍)가 열렸어요!',
-  4: '도서관(图书馆)이 열렸어요! 진아쌤이 중간 수사 회의를 준비하고 있대요.'
+  1: '🔓 정문 광장 오른쪽 대나무 문이 열렸다!\n운동장으로 가서 陈晨을 찾아보자.',
+  2: '🔓 운동장 위쪽 대나무 문이 열렸다!\n매점(小卖部) 앞에서 小雨를 찾아보자.',
+  3: '🔓 매점 왼쪽 숲길의 대나무 문이 열렸다!\n기숙사(宿舍) 앞에서 王浩를 찾아보자.',
+  4: '🔓 도서관(图书馆) 문이 열렸다!\n진아쌤이 중간 수사 회의를 준비하고 있대.'
 };
 async function rewards(no, r) {
   const L = lessonOf(no);
   await pageCard(no);
   const s = await mySentence(L.mySentence);
   await missionCard(`2권 ${no}과`, L.mission, s);
-  save.L[no] = 3; save.pages[no] = { sentence: s, first: r.first, total: r.total }; save.candy += 2; persist();
+  save.L[no] = 3; save.pages[no] = { sentence: s, first: r.first, total: r.total }; save.candy += 2; persist(); drawTray();
+  Sound.sfx('door');
   await say([{ t: '💡 힌트 사탕 2개를 받았다!' }, { t: NEXT_TIP[no] }]);
 }
 
 async function bossMeeting() {
-  await say(BOSS.intro);
+  await withPicture(5, () => say(BOSS.intro));
   const r = await chat('teacher', '진아쌤', BOSS.battle);
   const s = await mySentence([
     [{ zh: '中国学生', py: 'Zhōngguó xuésheng', ko: '중국 학생들은' }],
@@ -699,8 +987,8 @@ function titleScreen() {
   const nav = navigate(stage, { start: 0 });
   stage.querySelectorAll('.tb .big').forEach(b => b.onclick = () => {
     nav.stop(); Sound.init(); Sound.sfx('sel');
-    if (b.dataset.k === 'n') { store.set('save', null); save = newSave(); fade().then(() => run(newGame)); }
-    else fade().then(showMap);
+    if (b.dataset.k === 'n') { store.set('save', null); save = newSave(); Object.assign(player, { x: save.x, y: save.y, dir: save.dir, fx: save.x, fy: save.y, moving: null }); fade().then(() => run(newGame)); }
+    else fade().then(enterWorld);
   });
 }
 function nameEntry() {
@@ -718,24 +1006,25 @@ function nameEntry() {
   });
 }
 async function newGame() {
-  showMap();
+  enterWorld();
+  await sleep(300);
   await say([
     { who: '진아쌤', t: '안녕! 나는 진담중국어의 진아쌤이야.' },
     { who: '진아쌤', zh: '你好！欢迎来到中国！', py: 'Nǐ hǎo! Huānyíng lái dào Zhōngguó!', ko: '안녕! 중국에 온 걸 환영해!' },
     { who: '진아쌤', t: '이번 주에 너는 중국 星光中学(별빛 중학교)에 교환학생으로 왔어. 먼저 수사관 등록부터 하자!' }
   ]);
-  await nameEntry();
+  await nameEntry(); drawTray();
   await say([
     { who: '진아쌤', t: '반가워, {name}! 그런데 큰일이 생겼어.' },
-    { who: '진아쌤', t: '중국 친구 小雨의 "비밀 일기"가 바람에 날아가서 학교 곳곳에 흩어졌대.' },
-    { who: '진아쌤', t: '일기마다 "수상한 질문"이 하나씩 적혀 있어. 장소마다 숨은 단서 쪽지를 찾아서 비밀을 풀어 보자!' },
-    { who: '진아쌤', t: '쪽지 문제를 맞히면 빨간 도장을 받아. 틀리면 쪽지가 바람에 날아가서 다른 곳에 숨어. 다시 찾아서 꼭 풀자!' },
-    { who: '진아쌤', t: '도장 6개를 모으면 중국 친구와 메신저로 1분 대화를 할 수 있어.' },
-    { who: '진아쌤', t: '힌트 사탕 3개를 줄게. 어려운 문제에서 💡를 누르면 도움이 될 거야.' },
-    { who: '진아쌤', t: '자, 지도에서 1번 장소(교실동 1층)를 눌러 봐!' },
+    { who: '진아쌤', t: '중국 친구 小雨의 "비밀 일기"가 바람에 날아가 버렸대. 일기마다 "수상한 질문"이 하나씩 적혀 있어.' },
+    { who: '진아쌤', t: '학교 수풀에는 쪽지를 들고 숨은 "헷갈이"들이 있어. 만나면 중국어로 안개를 걷어 내고 도장을 받아!' },
+    { who: '진아쌤', t: '틀려도 괜찮아. 도망간 헷갈이는 오답 카드에 남았다가 다시 나타나. 그때 꼭 이기면 돼!' },
+    { who: '진아쌤', t: '도장 6개를 모으면 중국 친구와 메신저로 1분 대화를 해 봐. 그럼 다음 길의 대나무 문이 열려.' },
+    { who: '진아쌤', t: '힌트 사탕 3개를 줄게. 어려운 문제에서 💡를 누르면 도움이 돼.' },
+    { who: '진아쌤', t: '가고 싶은 곳을 누르면 걸어가고, 사람을 누르면 말을 걸어. 먼저 위쪽 교실동(教学楼) 앞의 반장 李明을 찾아가 봐!' },
     { who: '진아쌤', zh: '加油！', py: 'Jiāyóu!', ko: '힘내!' }
   ]);
-  save.intro = true; persist();
+  save.intro = true; persist(); refresh();
 }
 
 /* 카카오톡 등 앱 안 브라우저 안내 */
@@ -743,8 +1032,11 @@ if (/KAKAOTALK|Instagram|FBAN|FBAV|NAVER\(inapp/i.test(navigator.userAgent || ''
 
 /* 확인용 */
 window.__jdm = {
-  get save() { return save; }, get busy() { return busy; }, get screen() { return screen; }, get notes() { return notes; },
-  press, openScene, showMap, questText,
-  catchAll(n) { lessonOf(n).chunks.forEach(c => { save.caught[c.id] = 1; delete save.weak[c.id]; }); if (save.L[n] === 1) save.L[n] = 2; persist(); if (screen === 'scene') { notes = buildNotes(curScene); drawNotes(); drawTray(); } }
+  get save() { return save; }, get busy() { return busy; }, get screen() { return screen; }, player, npcs, press, encounter, questText,
+  tp(x, y, dir = 'down') { Object.assign(player, { x, y, fx: x, fy: y, dir, moving: null }); path = []; },
+  walkTo(x, y) { const p = bfs([[x, y]]); if (p) path = p; return !!p; },
+  catchAll(n) { lessonOf(n).chunks.forEach(c => { save.caught[c.id] = 1; delete save.weak[c.id]; }); if (save.L[n] === 1) save.L[n] = 2; persist(); drawTray(); }
 };
+preload();
+requestAnimationFrame(loop);
 titleScreen();
